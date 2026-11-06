@@ -1,42 +1,151 @@
-"""Student exercises for nonlinear stream-generator variants."""
+
+"""
+cipher_variants.py
+==================
+
+Alternative stream-cipher generators:
+1. NLFSR: nonlinear feedback shift register
+2. Geffe: combination of three LFSRs
+"""
 
 from stream_cipher import LFSR_PERIOD_BITS, MAX_SEED, _next_bit
+
 
 DEFAULT_GEFFE_SEEDS = (0xACE1, 0xBEEF, 0x1234)
 
 
-def _validate(length: int, seeds: tuple[int, ...], offset: int) -> None:
-    if not isinstance(length, int) or length < 0:
-        raise ValueError("length must be a non-negative integer")
-    if not isinstance(offset, int) or offset < 0:
-        raise ValueError("offset must be a non-negative integer")
-    if any(not isinstance(seed, int) or not 1 <= seed <= MAX_SEED for seed in seeds):
-        raise ValueError("every seed must be an integer from 1 to 65535")
+def _validate_length(length):
+    if isinstance(length, bool) or not isinstance(length, int):
+        raise TypeError("length must be an integer")
+    if length < 0:
+        raise ValueError("length must be non-negative")
 
 
-def nlfsr_keystream(length: int, seed: int, offset: int = 0) -> bytes:
-    """Generate bytes from an NLFSR with one nonlinear AND feedback term.
-
-    Use the base feedback bits 0, 2, 3, and 5, then XOR them with
-    (bit 1 AND bit 7). Output, shifting, offset, and packing match the LFSR.
-    """
-    _validate(length, (seed,), offset)
-    # TODO(student 7): replace this reference NLFSR in the handout.
-    pass
+def _validate_offset(offset):
+    if isinstance(offset, bool) or not isinstance(offset, int):
+        raise TypeError("offset must be an integer")
+    if offset < 0:
+        raise ValueError("offset must be non-negative")
 
 
-def geffe_keystream(
-    length: int,
-    seeds: tuple[int, int, int] = DEFAULT_GEFFE_SEEDS,
-    offset: int = 0,
-) -> bytes:
-    """Combine three LFSR output bits with the nonlinear Geffe function.
+def _validate_seed(seed):
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        raise TypeError("seed must be an integer")
+    if not 1 <= seed <= MAX_SEED:
+        raise ValueError(f"seed must be between 1 and {MAX_SEED}")
 
-    If the three output bits are x, y, and z, emit
-    (x AND y) XOR ((1 XOR x) AND z). Each component uses the base LFSR.
-    """
+
+def _validate_seeds(seeds):
+    if not isinstance(seeds, (tuple, list)):
+        raise TypeError("seeds must be a tuple or list")
+
     if len(seeds) != 3:
-        raise ValueError("the Geffe generator needs exactly three seeds")
-    _validate(length, seeds, offset)
-    # TODO(student 8): replace this reference Geffe generator in the handout.
-    pass
+        raise ValueError("exactly three seeds are required")
+
+    for seed in seeds:
+        _validate_seed(seed)
+
+
+def _nlfsr_next_bit(state):
+    """
+    Generate one bit using the nonlinear feedback rule.
+
+    Output:
+        Least significant bit (bit 0)
+
+    Feedback:
+        bit 0 XOR bit 2 XOR bit 3 XOR bit 5
+        XOR (bit 1 AND bit 7)
+    """
+    output_bit = state & 1
+
+    linear_feedback = (
+        ((state >> 0) & 1)
+        ^ ((state >> 2) & 1)
+        ^ ((state >> 3) & 1)
+        ^ ((state >> 5) & 1)
+    )
+
+    nonlinear_feedback = (
+        ((state >> 1) & 1)
+        & ((state >> 7) & 1)
+    )
+
+    feedback = linear_feedback ^ nonlinear_feedback
+
+    next_state = (state >> 1) | (feedback << 15)
+
+    return output_bit, next_state
+
+
+def nlfsr_keystream(length, seed, offset=0):
+    """
+    Generate keystream bytes using the NLFSR variant.
+
+    The first generated bit is placed in the MSB of the first byte.
+    Offset is measured in bytes.
+    """
+    _validate_length(length)
+    _validate_seed(seed)
+    _validate_offset(offset)
+
+    state = seed
+
+    # Skip the requested number of bytes.
+    for _ in range(offset * 8):
+        _, state = _nlfsr_next_bit(state)
+
+    result = bytearray()
+
+    for _ in range(length):
+        value = 0
+
+        for bit_position in range(8):
+            output_bit, state = _nlfsr_next_bit(state)
+            value = (value << 1) | output_bit
+
+        result.append(value)
+
+    return bytes(result)
+
+
+def geffe_keystream(length, seeds=DEFAULT_GEFFE_SEEDS, offset=0):
+    """
+    Generate keystream bytes using the Geffe generator.
+
+    Three LFSRs are combined using:
+
+        output = (x AND y) XOR ((1 XOR x) AND z)
+
+    The first generated bit is placed in the MSB of the first byte.
+    Offset is measured in bytes.
+    """
+    _validate_length(length)
+    _validate_seeds(seeds)
+    _validate_offset(offset)
+
+    state_x, state_y, state_z = seeds
+
+    # Skip the requested number of bytes in all three registers.
+    for _ in range(offset * 8):
+        _, state_x = _next_bit(state_x)
+        _, state_y = _next_bit(state_y)
+        _, state_z = _next_bit(state_z)
+
+    result = bytearray()
+
+    for _ in range(length):
+        value = 0
+
+        for bit_position in range(8):
+            x, state_x = _next_bit(state_x)
+            y, state_y = _next_bit(state_y)
+            z, state_z = _next_bit(state_z)
+
+            output_bit = (x & y) ^ ((1 ^ x) & z)
+
+            value = (value << 1) | output_bit
+
+        result.append(value)
+
+    return bytes(result)
